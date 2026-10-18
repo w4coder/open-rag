@@ -37,7 +37,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]  # tests import shared helpers from tests.conftest
 
 [tool.ruff]
 line-length = 100
