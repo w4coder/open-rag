@@ -1,0 +1,29 @@
+[
+ {
+  "comparison": "full_none->full_llm",
+  "queries": 1914,
+  "scope": "all",
+  "scope_label": "Toutes",
+  "fixed": 135,
+  "broke": 69,
+  "p_value": 0.0
+ },
+ {
+  "comparison": "full_none->full_llm",
+  "queries": 1914,
+  "scope": "extractive",
+  "scope_label": "Extractive",
+  "fixed": 40,
+  "broke": 33,
+  "p_value": 0.4828
+ },
+ {
+  "comparison": "full_none->full_llm",
+  "queries": 1914,
+  "scope": "abstractive",
+  "scope_label": "Abstractive",
+  "fixed": 95,
+  "broke": 36,
+  "p_value": 0.0
+ }
+]

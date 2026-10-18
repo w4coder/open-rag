@@ -1,0 +1,141 @@
+# Reference manifests (apply with kustomize/helm of your choice). Secrets/configmap omitted:
+# create `open-rag-secrets` (OPENAI_API_KEY, LANGSMITH_API_KEY, RAG_API_KEYS, RAG_QDRANT_API_KEY)
+# and `open-rag-config` (RAG_* tunables) first. Qdrant and Redis run as managed services or
+# their own HA charts (Qdrant cluster with replication_factor>=2, Redis with persistence +
+# replica). Uploads live on a ReadWriteMany volume (EFS / Filestore / Azure Files) shared by
+# the API (writer) and the workers (readers).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: rag-uploads}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: rwx            # e.g. efs-sc / filestore / azurefile
+  resources: {requests: {storage: 50Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: rag-api, labels: {app: rag-api}}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: rag-api}}
+  strategy: {rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}   # zero-downtime deploys
+  template:
+    metadata:
+      labels: {app: rag-api}
+      annotations: {prometheus.io/scrape: "true", prometheus.io/port: "8000", prometheus.io/path: /metrics}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      topologySpreadConstraints:       # survive the loss of a zone / node
+        - {maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: rag-api}}}
+        - {maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: rag-api}}}
+      containers:
+        - name: api
+          image: registry.example.com/open-rag:0.3.0   # pin by digest in CD
+          ports: [{containerPort: 8000}]
+          envFrom: [{configMapRef: {name: open-rag-config}}, {secretRef: {name: open-rag-secrets}}]
+          env:
+            - {name: RAG_QDRANT_URL, value: "http://qdrant:6333"}
+            - {name: RAG_REDIS_URL, value: "redis://redis:6379/0"}
+            - {name: RAG_UPLOAD_DIR, value: /app/data/uploads}
+          resources: {requests: {cpu: 500m, memory: 512Mi}, limits: {memory: 1Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          startupProbe: {httpGet: {path: /healthz, port: 8000}, failureThreshold: 30, periodSeconds: 2}
+          livenessProbe: {httpGet: {path: /healthz, port: 8000}, periodSeconds: 10}
+          readinessProbe: {httpGet: {path: /readyz, port: 8000}, periodSeconds: 5}
+          lifecycle: {preStop: {exec: {command: ["sleep", "5"]}}}   # let the LB drain first
+          volumeMounts: [{name: uploads, mountPath: /app/data/uploads}, {name: tmp, mountPath: /tmp}]
+      volumes:
+        - {name: uploads, persistentVolumeClaim: {claimName: rag-uploads}}
+        - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: rag-api}
+spec:
+  selector: {app: rag-api}
+  ports: [{port: 80, targetPort: 8000}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: rag-api}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: rag-api}
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 60}}
+  behavior: {scaleDown: {stabilizationWindowSeconds: 300}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: rag-api}
+spec:
+  minAvailable: 2
+  selector: {matchLabels: {app: rag-api}}
+---
+# Ingestion workers: scaled on stream lag, not CPU (requires KEDA).
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: rag-worker, labels: {app: rag-worker}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: rag-worker}}
+  template:
+    metadata:
+      labels: {app: rag-worker}
+      annotations: {prometheus.io/scrape: "true", prometheus.io/port: "9100"}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 600   # SIGTERM => finish the current document, then exit
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: worker
+          image: registry.example.com/open-rag:0.3.0
+          command: ["python", "-m", "open_rag.queue"]
+          envFrom: [{configMapRef: {name: open-rag-config}}, {secretRef: {name: open-rag-secrets}}]
+          env:
+            - {name: RAG_QDRANT_URL, value: "http://qdrant:6333"}
+            - {name: RAG_REDIS_URL, value: "redis://redis:6379/0"}
+          ports: [{containerPort: 9100}]
+          resources: {requests: {cpu: "1", memory: 1Gi}, limits: {memory: 2Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: uploads, mountPath: /app/data/uploads, readOnly: true}, {name: tmp, mountPath: /tmp}]
+      volumes:
+        - {name: uploads, persistentVolumeClaim: {claimName: rag-uploads}}
+        - {name: tmp, emptyDir: {}}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: {name: rag-worker}
+spec:
+  scaleTargetRef: {name: rag-worker}
+  minReplicaCount: 0
+  maxReplicaCount: 40
+  triggers:
+    - type: redis-streams
+      metadata: {address: "redis:6379", stream: "rag:ingest", consumerGroup: "rag:workers", lagCount: "10"}
+---
+# Network: only the ingress controller reaches the API; pods only reach their dependencies.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: rag-default}
+spec:
+  podSelector: {matchExpressions: [{key: app, operator: In, values: [rag-api, rag-worker]}]}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]
+      ports: [{port: 8000}]
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]
+      ports: [{port: 8000}, {port: 9100}]
+  egress:
+    - to: [{podSelector: {matchLabels: {app: qdrant}}}]
+      ports: [{port: 6333}]
+    - to: [{podSelector: {matchLabels: {app: redis}}}]
+      ports: [{port: 6379}]
+    - to: [{namespaceSelector: {}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+      ports: [{port: 53, protocol: UDP}]
+    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]}}]
+      ports: [{port: 443}]          # LLM / embedding / LangSmith APIs

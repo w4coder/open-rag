@@ -1,0 +1,32 @@
+name: open-rag
+x-app: &app
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  env_file: ../.env
+  environment:
+    RAG_QDRANT_URL: http://qdrant:6333
+    RAG_REDIS_URL: redis://redis:6379/0
+    RAG_UPLOAD_DIR: /app/data/uploads
+  depends_on: [qdrant, redis]
+
+services:
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+    volumes: ["uploads:/app/data/uploads"]
+  worker:                      # scale independently: docker compose up --scale worker=4
+    <<: *app
+    command: ["python", "-m", "open_rag.queue"]
+    volumes: ["uploads:/app/data/uploads"]
+    stop_grace_period: 10m       # SIGTERM => finish the current document, then exit
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    ports: ["6333:6333"]
+    volumes: ["qdrant:/qdrant/storage"]
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis:/data"]
+
+volumes: {uploads: {}, qdrant: {}, redis: {}}

@@ -1,0 +1,32 @@
+[
+ {
+  "metric": "correctness",
+  "label": "Réponses correctes (juge ≥ 4/5)",
+  "threshold": 0.9,
+  "project_key": "end_to_end.answer_correctness"
+ },
+ {
+  "metric": "doc_hit5",
+  "label": "Bon papier dans le top 5",
+  "threshold": 0.9,
+  "project_key": "hybrid_rrf.hit@5"
+ },
+ {
+  "metric": "doc_mrr",
+  "label": "Rang réciproque moyen (MRR)",
+  "threshold": 0.7,
+  "project_key": "hybrid_rrf.mrr"
+ },
+ {
+  "metric": "citation_gold_doc",
+  "label": "Citations dans le bon papier",
+  "threshold": 0.95,
+  "project_key": "end_to_end.citation_rate"
+ },
+ {
+  "metric": "refusal_rate",
+  "label": "Refus quand la réponse est absente",
+  "threshold": 0.95,
+  "project_key": "end_to_end.refusal_accuracy"
+ }
+]

@@ -1,0 +1,25 @@
+{
+  "config": {
+    "llm_provider": "fake",
+    "embedding_provider": "fake",
+    "reranker": "none",
+    "chunk_size": 800
+  },
+  "dense_only": {
+    "hit@5": 1.0,
+    "mrr": 1.0
+  },
+  "sparse_only": {
+    "hit@5": 1.0,
+    "mrr": 1.0
+  },
+  "hybrid_rrf": {
+    "hit@5": 1.0,
+    "mrr": 1.0
+  },
+  "end_to_end": {
+    "answer_correctness": 0.833,
+    "citation_rate": 0.833,
+    "refusal_accuracy": 1.0
+  }
+}

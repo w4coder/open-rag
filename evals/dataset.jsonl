@@ -1,0 +1,14 @@
+{"id":"q01","question":"What does error NB-4021 mean?","gold":"expired or revoked","source":"auth.md","answerable":true}
+{"id":"q02","question":"How long does an OAuth access token live?","gold":"15 minutes","source":"auth.md","answerable":true}
+{"id":"q03","question":"How often are API keys required to be rotated?","gold":"expires after 90 days","source":"auth.md","answerable":true}
+{"id":"q04","question":"What is the price of the Archive storage tier per GB?","gold":"0.004 EUR","source":"storage.md","answerable":true}
+{"id":"q05","question":"After how many days unread objects move from Hot to Warm?","gold":"30 days move from Hot to Warm","source":"storage.md","answerable":true}
+{"id":"q06","question":"What is the rate limit on the Business plan?","gold":"3000 requests per minute","source":"storage.md","answerable":true}
+{"id":"q07","question":"What is the maximum size of one object?","gold":"5 TB","source":"storage.md","answerable":true}
+{"id":"q08","question":"How long are database snapshots retained?","gold":"retains snapshots for 14 days","source":"operations.md","answerable":true}
+{"id":"q09","question":"What is the availability SLA of the Enterprise plan?","gold":"99.99 percent","source":"operations.md","answerable":true}
+{"id":"q10","question":"How quickly must the on-call engineer acknowledge a severity 1 incident?","gold":"within 15 minutes","source":"operations.md","answerable":true}
+{"id":"q11","question":"How long is the soft-delete window after deleting a project?","gold":"30-day soft-delete window","source":"operations.md","answerable":true}
+{"id":"q12","question":"Which identity provider protocol do enterprise plans support for SSO?","gold":"SAML 2.0","source":"auth.md","answerable":true}
+{"id":"q13","question":"What is the CEO's favourite colour?","gold":"","source":"","answerable":false}
+{"id":"q14","question":"Does Nimbus support quantum computing instances?","gold":"","source":"","answerable":false}

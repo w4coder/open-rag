@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.qdrant/
+data/uploads/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+data/open_ragbench/
+.tools/
+# Benchmark artefacts: logs, and per-question files that quote vectara/open_ragbench
+# (CC-BY-NC-4.0, incompatible with redistribution under Apache-2.0). Summaries are kept.
+evals/results/*.log
+evals/results/*_details.jsonl
+evals/results/report/failures.json
+.qdrant-initialized
+# Never publish PDFs (benchmark papers, user documents)
+*.pdf
+# Only the final full-benchmark summaries are published
+evals/results/orb_*.json
+!evals/results/orb_full_*.json
+evals/results/open_ragbench_latest.json

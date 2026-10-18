@@ -1,0 +1,37 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test-and-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      # Reproducible: install the exact pinned set, then the package without re-resolving.
+      - run: pip install -r requirements-dev.lock && pip install --no-deps -e .
+      - run: ruff check src tests evals
+      - run: pytest -q
+      # Regression gate (offline, deterministic): fail the PR if quality drops.
+      - run: python -m evals.run_eval
+      - run: python -m evals.check_thresholds
+      - run: pip install pip-audit && pip-audit -r requirements.lock   # known CVEs in pinned deps
+      - run: docker build -f deploy/Dockerfile -t open-rag:ci .
+
+  # Absolute quality gate with real models (main only). Opt-in: set the repository variable
+  # RUN_REAL_EVALS=true and the OPENAI_API_KEY secret (LANGSMITH_API_KEY optional).
+  eval-real-models:
+    if: github.ref == 'refs/heads/main' && vars.RUN_REAL_EVALS == 'true'
+    needs: test-and-eval
+    runs-on: ubuntu-latest
+    env:
+      RAG_LLM_PROVIDER: openai
+      RAG_EMBEDDING_PROVIDER: openai
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_TRACING: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements-dev.lock && pip install --no-deps -e .
+      - run: python -m evals.run_eval --langsmith && python -m evals.check_thresholds

@@ -1,0 +1,75 @@
+{
+  "benchmark": "vectara/open_ragbench (text-only)",
+  "config": {
+    "llm_provider": "openai",
+    "llm_model": "gpt-4o-mini",
+    "embedding": "openai:text-embedding-3-small",
+    "reranker": "none",
+    "chunk_size": 800,
+    "top_k_dense": 20,
+    "top_k_sparse": 20,
+    "top_k_rerank": 5,
+    "judge_model": "gpt-4.1-mini",
+    "queries": 1914,
+    "unanswerable": 262,
+    "holdout_papers": 50,
+    "papers": 987,
+    "seed": 0,
+    "chunks_indexed": 163906
+  },
+  "retrieval": {
+    "dense_only": {
+      "doc_hit@5": 0.85,
+      "doc_mrr": 0.827,
+      "section_hit@5": 0.687,
+      "doc_in_candidates": 0.867
+    },
+    "sparse_only": {
+      "doc_hit@5": 0.983,
+      "doc_mrr": 0.963,
+      "section_hit@5": 0.905,
+      "doc_in_candidates": 0.994
+    },
+    "hybrid_rrf": {
+      "doc_hit@5": 0.985,
+      "doc_mrr": 0.921,
+      "section_hit@5": 0.889,
+      "doc_in_candidates": 0.998
+    }
+  },
+  "end_to_end": {
+    "all": {
+      "n": 1914,
+      "answered_rate": 0.903,
+      "error_rate": 0.001,
+      "citation_gold_doc": 0.986,
+      "correctness": 0.867,
+      "mean_score_1_5": 4.3,
+      "p50_latency_ms": 1264
+    },
+    "abstractive": {
+      "n": 893,
+      "answered_rate": 0.878,
+      "error_rate": 0.0,
+      "citation_gold_doc": 0.991,
+      "correctness": 0.834,
+      "mean_score_1_5": 4.08,
+      "p50_latency_ms": 1316
+    },
+    "extractive": {
+      "n": 1021,
+      "answered_rate": 0.925,
+      "error_rate": 0.001,
+      "citation_gold_doc": 0.982,
+      "correctness": 0.896,
+      "mean_score_1_5": 4.5,
+      "p50_latency_ms": 1212
+    },
+    "unanswerable": {
+      "n": 262,
+      "refusal_rate": 0.962,
+      "main_n": 38,
+      "holdout_n": 224
+    }
+  }
+}
