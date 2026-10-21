@@ -67,6 +67,7 @@ class RagService:
                 "status": state.get("status"),
                 "reason": state.get("reason"),
                 "search_query": state.get("search_query"),
+                "escalated": state.get("escalated", False),
                 "n_candidates": len(state.get("candidates", [])),
                 "latency_ms": round((time.perf_counter() - started) * 1000, 1),
             },

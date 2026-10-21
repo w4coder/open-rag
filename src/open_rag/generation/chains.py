@@ -20,7 +20,7 @@ from open_rag.generation.prompts import (
     REWRITE_PROMPT,
 )
 from open_rag.models import Answer
-from open_rag.providers import structured_llm, text_llm, tokenize
+from open_rag.providers import get_escalation_model, structured_llm, text_llm, tokenize
 
 STOPWORDS = frozenset(
     ["le", "la", "les", "un", "une", "des", "du", "de", "et", "en", "est", "the", "a", "an", "of", "to", "in", "is", "are", "what", "how", "do", "does", "pour", "que", "qui", "quoi", "comment", "quel", "quelle", "dans", "sur", "au", "aux", "ce", "cette", "ces", "il", "elle", "on", "and", "or", "for"]
@@ -84,11 +84,7 @@ def extractive_answer(inp: dict) -> Answer:
     return Answer(answer=" ".join(s[0] for s in picked), cited_ids=[sents[i][1]])
 
 
-def build_answerer(settings: Settings) -> Runnable:
-    """Runnable[{question, hits}] -> Answer"""
-    llm = structured_llm(settings, Answer)
-    if llm is None:
-        return RunnableLambda(extractive_answer).with_config(run_name="answer_fake")
+def _answer_chain(llm: Runnable, run_name: str) -> Runnable:
     generate = (
         RunnableLambda(lambda x: {"question": x["question"], "context": format_context(x["hits"])})
         | ANSWER_PROMPT
@@ -97,7 +93,22 @@ def build_answerer(settings: Settings) -> Runnable:
     return (
         RunnablePassthrough.assign(answer=generate)
         | RunnableLambda(lambda x: resolve_citations(x["answer"], x["hits"]))
-    ).with_config(run_name="generate_answer")
+    ).with_config(run_name=run_name)
+
+
+def build_answerer(settings: Settings) -> Runnable:
+    """Runnable[{question, hits}] -> Answer"""
+    llm = structured_llm(settings, Answer)
+    if llm is None:
+        return RunnableLambda(extractive_answer).with_config(run_name="answer_fake")
+    return _answer_chain(llm, "generate_answer")
+
+
+def build_escalation_answerer(settings: Settings) -> Runnable | None:
+    """Same prompt and output schema on the escalation model; None when not configured."""
+    llm = get_escalation_model(settings)
+    return None if llm is None else _answer_chain(llm.with_structured_output(Answer),
+                                                  "generate_answer_escalated")
 
 
 # ---- contextual retrieval (enrichment) ---------------------------------------------------

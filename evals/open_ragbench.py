@@ -282,6 +282,8 @@ def run_queries(svc: RagService, items: list[dict], tenants: dict[str, str], wor
             return {"answer": r.answer, "status": r.trace.get("status"),
                     "reason": r.trace.get("reason"),
                     "cited": [c.source for c in r.citations],
+                    "cited_ids": [c.chunk_id for c in r.citations],
+                    "escalated": r.trace.get("escalated", False),
                     "latency_ms": r.trace.get("latency_ms")}
         except Exception as e:  # one failure must not kill a 20-minute run
             return {"answer": "", "status": "error", "cited": [], "error": str(e)[:300]}
@@ -335,7 +337,46 @@ def judge(items: list[dict], answers: list[dict], model: str, concurrency: int) 
     return out
 
 
-def summarize_e2e(items: list[dict], answers: list[dict], verdicts: list[dict] | None) -> dict:
+class Grounding(BaseModel):
+    verdict: str = Field(description="supported | partly_supported | unsupported")
+
+
+GROUNDING_SYSTEM = """Is the ANSWER supported by the CONTEXT passages the system cited?
+supported: every claim is in the context; partly_supported: some claims are not;
+unsupported: the answer relies on facts absent from the context."""
+
+
+def judge_grounding(svc: RagService, items: list[dict], answers: list[dict], model: str,
+                    concurrency: int) -> list[dict | None]:
+    """For answers to *unanswerable* questions: a question whose own paper is missing can
+    still be answered by another paper (generic questions), so a refusal-only metric
+    penalises legitimate answers. What must not happen is an answer the cited passages do
+    not support."""
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_openai import ChatOpenAI
+
+    chain = ChatPromptTemplate.from_messages([("system", GROUNDING_SYSTEM), ("human",
+        "QUESTION: {question}\nANSWER: {answer}\n\nCONTEXT:\n{context}")]) \
+        | ChatOpenAI(model=model, temperature=0, max_retries=3).with_structured_output(Grounding)
+    todo = [i for i, (it, a) in enumerate(zip(items, answers))
+            if not it.get("answerable", True) and a.get("status") == "ok"]
+    inputs = []
+    for i in todo:
+        pts = svc.index.client.retrieve(svc.index.alias, ids=answers[i]["cited_ids"],
+                                        with_payload=True) if answers[i]["cited_ids"] else []
+        context = "\n\n".join(p.payload.get("parent_text", p.payload["text"]) for p in pts)
+        inputs.append({"question": items[i]["question"], "answer": answers[i]["answer"],
+                       "context": context or "(no passage cited)"})
+    verdicts = chain.batch(inputs, config={"max_concurrency": concurrency},
+                           return_exceptions=True)
+    out: list[dict | None] = [None] * len(items)
+    for i, v in zip(todo, verdicts):
+        out[i] = {"verdict": "error"} if isinstance(v, Exception) else v.model_dump()
+    return out
+
+
+def summarize_e2e(items: list[dict], answers: list[dict], verdicts: list[dict] | None,
+                  grounding: list[dict | None] | None = None) -> dict:
     def block(idx: list[int]) -> dict:
         ans = [answers[i] for i in idx]
         answered = [i for i in idx if answers[i]["status"] == "ok"]
@@ -350,6 +391,7 @@ def summarize_e2e(items: list[dict], answers: list[dict], verdicts: list[dict] |
             scores = [verdicts[i]["score"] for i in idx if verdicts[i]["score"] is not None]
             res["correctness"] = round(statistics.mean(float(s >= 4) for s in scores), 3)
             res["mean_score_1_5"] = round(statistics.mean(scores), 2)
+        res["escalation_rate"] = round(sum(bool(a.get("escalated")) for a in ans) / len(idx), 3)
         lat = [a["latency_ms"] for a in ans if a.get("latency_ms")]
         if lat:
             res["p50_latency_ms"] = round(statistics.median(lat))
@@ -363,7 +405,11 @@ def summarize_e2e(items: list[dict], answers: list[dict], verdicts: list[dict] |
     unans = [i for i, it in enumerate(items) if not it.get("answerable", True)]
     if unans:  # the right behaviour is a refusal: any answer here is unsupported by the corpus
         refused = lambda ix: round(sum(answers[i]["status"] != "ok" for i in ix) / len(ix), 3)  # noqa: E731
-        out["unanswerable"] = {"n": len(unans), "refusal_rate": refused(unans), **{
+        unsupported = sum(1 for i in unans if grounding and grounding[i]
+                          and grounding[i]["verdict"] != "supported")
+        out["unanswerable"] = {"n": len(unans), "refusal_rate": refused(unans),
+                               "unsupported_answer_rate": round(unsupported / len(unans), 3)
+                               if grounding else None, **{
             f"{c}_n": len(ix) for c in ("main", "holdout")
             if (ix := [i for i in unans if items[i]["corpus"] == c])}}
     return out
@@ -386,6 +432,9 @@ def main() -> None:
     ap.add_argument("--absent", type=int, default=100,
                     help="max questions about papers that are not indexed at all (refusal test)")
     ap.add_argument("--tag", help="also save results as results/orb_<tag>.json (+ _details.jsonl)")
+    ap.add_argument("--reuse-retrieval", metavar="TAG",
+                    help="reuse the retrieval ablation of results/orb_<TAG> (same questions and "
+                         "index): for generation-only experiments")
     ap.add_argument("--workers", type=int, help="parallel queries (default: 4 with a Qdrant "
                     "server, 1 with embedded Qdrant which is not thread-safe)")
     args = ap.parse_args()
@@ -415,14 +464,25 @@ def main() -> None:
         ensure_holdout(svc, tenant, tenants["holdout"], held)
     print(f"{len(unans)} unanswerable questions ({len(held)} papers held out)")
 
-    print("retrieval ablation...")
-    retrieval, ranks = eval_retrieval(svc, items, tenant, workers)
+    if args.reuse_retrieval:
+        # Generation-only change (model, prompt, escalation): the retrieval ablation of an
+        # earlier run on the same questions and index is still valid, and costly to redo.
+        prev = json.loads((OUT / f"orb_{args.reuse_retrieval}.json").read_text(encoding="utf-8"))
+        prev_ranks = {r["id"]: r["retrieval"] for r in map(json.loads, (
+            OUT / f"orb_{args.reuse_retrieval}_details.jsonl").read_text(encoding="utf-8").splitlines())}
+        retrieval, ranks = prev["retrieval"], [prev_ranks[it["id"]] for it in items]
+        print(f"retrieval ablation reused from {args.reuse_retrieval}")
+    else:
+        print("retrieval ablation...")
+        retrieval, ranks = eval_retrieval(svc, items, tenant, workers)
     ranks += [{} for _ in unans]
     items = items + unans
     results: dict = {
         "benchmark": "vectara/open_ragbench (text-only)",
         "config": {"llm_provider": s.llm_provider, "llm_model": s.llm_model,
                    "embedding": f"{s.embedding_provider}:{s.embedding_model}",
+                   "escalation_model": s.llm_escalation_model or None,
+                   "retrieval_reused_from": args.reuse_retrieval,
                    "reranker": s.reranker, "chunk_size": s.chunk_size,
                    "top_k_dense": s.top_k_dense, "top_k_sparse": s.top_k_sparse,
                    "top_k_rerank": s.top_k_rerank, "judge_model": args.judge_model if judge_on else None,
@@ -432,19 +492,22 @@ def main() -> None:
         "retrieval": retrieval,
     }
     answers: list[dict] = [{} for _ in items]
-    verdicts = None
+    verdicts = grounding = None
     if not args.retrieval_only:
         print("end-to-end...")
         answers = run_queries(svc, items, tenants, workers)
         if judge_on:
             print(f"judging with {args.judge_model}...")
             verdicts = judge(items, answers, args.judge_model, concurrency=8)
-        results["end_to_end"] = summarize_e2e(items, answers, verdicts)
+            grounding = judge_grounding(svc, items, answers, args.judge_model, concurrency=8)
+        results["end_to_end"] = summarize_e2e(items, answers, verdicts, grounding)
 
     OUT.mkdir(exist_ok=True)
     details = "".join(  # per-question record: the raw material of error analysis
         json.dumps({**it, **answers[i], "retrieval": ranks[i],
-                    "judge": verdicts[i] if verdicts else None}, ensure_ascii=False) + "\n"
+                    "judge": verdicts[i] if verdicts else None,
+                    "grounding": grounding[i] if grounding else None},
+                   ensure_ascii=False) + "\n"
         for i, it in enumerate(items))
     for name in ["open_ragbench_latest", *([f"orb_{args.tag}"] if args.tag else [])]:
         (OUT / f"{name}.json").write_text(json.dumps(results, indent=2), encoding="utf-8")

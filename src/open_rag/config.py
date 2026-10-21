@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     llm_provider: Literal["openai", "fake"] = "fake"
     llm_model: str = "gpt-4o-mini"
     llm_fallback_model: str = ""  # e.g. "gpt-4.1-mini": used when the primary fails
+    # Re-asked (same prompt, same context) when the primary refuses for lack of context.
+    # Benchmarked: most such refusals had the answer in the context (small-model miss).
+    llm_escalation_model: str = ""  # e.g. "gpt-6-luna"
+    llm_escalation_effort: str = "low"  # reasoning effort of a reasoning model, "" = none
     llm_timeout_s: float = 30.0
     llm_max_retries: int = 2
     embedding_provider: Literal["openai", "fake"] = "fake"

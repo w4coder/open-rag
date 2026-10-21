@@ -6,11 +6,14 @@ It is typically the best quality-per-effort upgrade after hybrid search.
 """
 from __future__ import annotations
 
+import logging
 from typing import Protocol
 
 from open_rag.config import Settings
 from open_rag.generation.chains import build_llm_scorer
 from open_rag.indexing.store import Hit
+
+log = logging.getLogger(__name__)
 
 
 class Reranker(Protocol):
@@ -39,13 +42,22 @@ class CrossEncoderReranker:
 class LLMReranker:
     def __init__(self, settings: Settings) -> None:
         self.scorer = build_llm_scorer(settings)
+        self.min_relevance = settings.min_relevance
 
     def rerank(self, query: str, hits: list[Hit], top_k: int) -> list[Hit]:
         if not hits or self.scorer is None:
             return hits[:top_k]
         # Short numbers, not chunk UUIDs: the model copies "[7]" reliably, 36-char ids less so.
         passages = "\n".join(f"[{i}] {h.text[:600]}" for i, h in enumerate(hits, 1))
-        out = self.scorer.invoke({"question": query, "passages": passages})
+        try:
+            out = self.scorer.invoke({"question": query, "passages": passages})
+        except Exception:
+            # Degrade, don't fail: reranking refines an already good hybrid ranking. Keep the
+            # RRF order, with scores lifted to the relevance floor so the min_relevance filter
+            # (calibrated on LLM scores) does not drop every passage.
+            log.warning("LLM reranker failed; falling back to the hybrid ranking", exc_info=True)
+            return [Hit(**{**h.__dict__, "score": max(h.score, self.min_relevance)})
+                    for h in hits[:top_k]]
         by_pos = {s.id: s.score for s in out.scores}
         scored = [(h, by_pos.get(i, 0.0)) for i, h in enumerate(hits, 1)]
         ranked = sorted(scored, key=lambda p: p[1], reverse=True)[:top_k]  # stable: ties keep RRF order

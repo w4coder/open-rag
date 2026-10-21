@@ -11,12 +11,18 @@ agentic project (same state + nodes, add loops).
 """
 from __future__ import annotations
 
+import logging
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from open_rag.config import Settings
-from open_rag.generation.chains import REFUSAL, build_answerer, build_rewriter
+from open_rag.generation.chains import (
+    REFUSAL,
+    build_answerer,
+    build_escalation_answerer,
+    build_rewriter,
+)
 from open_rag.generation.guardrails import (
     GuardrailError,
     check_grounding,
@@ -28,6 +34,8 @@ from open_rag.models import Answer, Citation
 from open_rag.observability import timed_node
 from open_rag.retrieval.hybrid import HybridRetriever
 from open_rag.retrieval.rerank import Reranker
+
+log = logging.getLogger(__name__)
 
 
 class RagState(TypedDict, total=False):
@@ -43,6 +51,7 @@ class RagState(TypedDict, total=False):
     grounded: bool
     status: str  # ok | blocked | no_evidence | ungrounded
     reason: str
+    escalated: bool  # the escalation model answered after the primary refused
 
 
 def _history_text(history: list[dict[str, str]]) -> str:
@@ -52,6 +61,7 @@ def _history_text(history: list[dict[str, str]]) -> str:
 def build_graph(settings: Settings, retriever: HybridRetriever, reranker: Reranker):
     rewriter = build_rewriter(settings)
     answerer = build_answerer(settings)
+    escalation = build_escalation_answerer(settings)
 
     def guard(state: RagState) -> RagState:
         try:
@@ -81,21 +91,34 @@ def build_graph(settings: Settings, retriever: HybridRetriever, reranker: Rerank
         return {"hits": [h for h in top if h.score >= settings.min_relevance]}
 
     def generate(state: RagState) -> RagState:
-        ans: Answer = answerer.invoke({"question": state["question"], "hits": state["hits"]})
+        inp = {"question": state["question"], "hits": state["hits"]}
+        ans: Answer = answerer.invoke(inp)
+        escalated = False
+        if ans.insufficient_context and escalation is not None:
+            # The primary refused although retrieval returned passages. Small models often
+            # miss an answer that is in the context: ask the stronger model, same prompt and
+            # context. Only refusals pay for it (a few % of queries); its answer still goes
+            # through the grounding check below. If it fails, the primary's refusal stands.
+            try:
+                ans, escalated = escalation.invoke(inp), True
+            except Exception:
+                log.warning("escalation model failed; keeping the primary refusal",
+                            exc_info=True)
         by_id = {h.chunk_id: h for h in state["hits"]}
         report = check_grounding(ans, set(by_id))
         if not report.grounded:
             return {"status": "ungrounded", "reason": report.reason, "answer": REFUSAL,
-                    "grounded": False, "citations": []}
+                    "grounded": False, "citations": [], "escalated": escalated}
         if ans.insufficient_context:
             return {"status": "no_evidence", "answer": ans.answer or REFUSAL, "grounded": True,
-                    "citations": []}
+                    "citations": [], "escalated": escalated}
         cites = [
             Citation(chunk_id=i, source=by_id[i].source, section=by_id[i].section,
                      snippet=by_id[i].text[:240])
             for i in report.valid_ids
         ]
-        return {"status": "ok", "answer": ans.answer, "grounded": True, "citations": cites}
+        return {"status": "ok", "answer": ans.answer, "grounded": True, "citations": cites,
+                "escalated": escalated}
 
     def no_evidence(state: RagState) -> RagState:
         return {"status": "no_evidence", "answer": REFUSAL, "grounded": True, "citations": []}

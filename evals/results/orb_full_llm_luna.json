@@ -1,0 +1,87 @@
+{
+  "benchmark": "vectara/open_ragbench (text-only)",
+  "config": {
+    "llm_provider": "openai",
+    "llm_model": "gpt-4o-mini",
+    "embedding": "openai:text-embedding-3-small",
+    "escalation_model": "gpt-6-luna",
+    "retrieval_reused_from": "full_llm",
+    "reranker": "llm",
+    "chunk_size": 800,
+    "top_k_dense": 20,
+    "top_k_sparse": 20,
+    "top_k_rerank": 5,
+    "judge_model": "gpt-4.1-mini",
+    "queries": 1914,
+    "unanswerable": 262,
+    "holdout_papers": 50,
+    "papers": 987,
+    "seed": 0,
+    "chunks_indexed": 163906
+  },
+  "retrieval": {
+    "dense_only": {
+      "doc_hit@5": 0.851,
+      "doc_mrr": 0.827,
+      "section_hit@5": 0.687,
+      "doc_in_candidates": 0.867
+    },
+    "sparse_only": {
+      "doc_hit@5": 0.983,
+      "doc_mrr": 0.963,
+      "section_hit@5": 0.905,
+      "doc_in_candidates": 0.994
+    },
+    "hybrid_rrf": {
+      "doc_hit@5": 0.986,
+      "doc_mrr": 0.922,
+      "section_hit@5": 0.887,
+      "doc_in_candidates": 0.998
+    },
+    "hybrid+llm": {
+      "doc_hit@5": 0.993,
+      "doc_mrr": 0.974,
+      "section_hit@5": 0.924,
+      "doc_in_candidates": 0.993
+    }
+  },
+  "end_to_end": {
+    "all": {
+      "n": 1914,
+      "answered_rate": 0.982,
+      "error_rate": 0.002,
+      "citation_gold_doc": 0.993,
+      "correctness": 0.942,
+      "mean_score_1_5": 4.59,
+      "escalation_rate": 0.064,
+      "p50_latency_ms": 4091
+    },
+    "abstractive": {
+      "n": 893,
+      "answered_rate": 0.984,
+      "error_rate": 0.001,
+      "citation_gold_doc": 0.993,
+      "correctness": 0.944,
+      "mean_score_1_5": 4.48,
+      "escalation_rate": 0.073,
+      "p50_latency_ms": 4072
+    },
+    "extractive": {
+      "n": 1021,
+      "answered_rate": 0.979,
+      "error_rate": 0.002,
+      "citation_gold_doc": 0.993,
+      "correctness": 0.94,
+      "mean_score_1_5": 4.68,
+      "escalation_rate": 0.057,
+      "p50_latency_ms": 4102
+    },
+    "unanswerable": {
+      "n": 262,
+      "refusal_rate": 0.885,
+      "unsupported_answer_rate": 0.008,
+      "main_n": 38,
+      "holdout_n": 224
+    }
+  }
+}

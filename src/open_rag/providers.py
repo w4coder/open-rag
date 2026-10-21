@@ -71,9 +71,12 @@ def get_embeddings(settings: Settings) -> Embeddings:
     return HashingEmbeddings(settings.embedding_dim)
 
 
-def _openai(settings: Settings, model: str):
+def _openai(settings: Settings, model: str, reasoning_effort: str = ""):
     from langchain_openai import ChatOpenAI
 
+    if reasoning_effort:  # reasoning models take an effort level and reject temperature=0
+        return ChatOpenAI(model=model, reasoning_effort=reasoning_effort,
+                          timeout=settings.llm_timeout_s, max_retries=settings.llm_max_retries)
     # temperature=0: RAG answers should be reproducible and extractive.
     return ChatOpenAI(model=model, temperature=0, timeout=settings.llm_timeout_s,
                       max_retries=settings.llm_max_retries)
@@ -89,6 +92,12 @@ def get_chat_model(settings: Settings):
 def get_fallback_model(settings: Settings):
     if settings.llm_provider == "openai" and settings.llm_fallback_model:
         return _openai(settings, settings.llm_fallback_model)
+    return None
+
+
+def get_escalation_model(settings: Settings):
+    if settings.llm_provider == "openai" and settings.llm_escalation_model:
+        return _openai(settings, settings.llm_escalation_model, settings.llm_escalation_effort)
     return None
 
 

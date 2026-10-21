@@ -93,3 +93,65 @@ def test_guardrails_input_and_pii():
     with pytest.raises(GuardrailError):
         check_input("a" * 101, 100)
     assert "<EMAIL>" in redact_pii("mail me at john@doe.com")
+
+
+def _service_with_answerers(settings, monkeypatch, primary, escalation):
+    from tests.conftest import CORPUS, new_client
+
+    import open_rag.graph as graph_mod
+    from open_rag.indexing.store import VectorIndex
+    from open_rag.ingestion.pipeline import ingest_path
+    from open_rag.providers import get_embeddings
+    from open_rag.service import RagService
+
+    monkeypatch.setattr(graph_mod, "build_answerer", lambda s: primary)
+    monkeypatch.setattr(graph_mod, "build_escalation_answerer", lambda s: escalation)
+    index = VectorIndex(settings, get_embeddings(settings), client=new_client())
+    ingest_path(CORPUS, index, settings, "tenant-a")
+    return RagService(settings.model_copy(update={"cache_enabled": False}), index=index)
+
+
+def test_refusal_is_escalated_with_the_same_context(settings, monkeypatch):
+    from langchain_core.runnables import RunnableLambda
+
+    seen = []
+    refuse = RunnableLambda(lambda x: Answer(answer="no", insufficient_context=True))
+    answer = RunnableLambda(lambda x: seen.append(x["hits"]) or Answer(
+        answer="expired or revoked", cited_ids=[x["hits"][0].chunk_id]))
+    svc = _service_with_answerers(settings, monkeypatch, refuse, answer)
+    r = svc.query(QueryRequest(question="What does error NB-4021 mean?"), "tenant-a")
+    assert r.trace["escalated"] and r.trace["status"] == "ok" and r.citations
+    assert seen and seen[0]  # the escalation model received the retrieved passages
+
+
+def test_no_escalation_when_unconfigured_or_failing(settings, monkeypatch):
+    from langchain_core.runnables import RunnableLambda
+
+    refuse = RunnableLambda(lambda x: Answer(answer="no", insufficient_context=True))
+    q = QueryRequest(question="What does error NB-4021 mean?")
+    svc = _service_with_answerers(settings, monkeypatch, refuse, None)
+    r = svc.query(q, "tenant-a")
+    assert r.trace["status"] == "no_evidence" and not r.trace["escalated"]
+
+    def boom(_):
+        raise RuntimeError("escalation outage")
+
+    svc = _service_with_answerers(settings, monkeypatch, refuse, RunnableLambda(boom))
+    r = svc.query(q, "tenant-a")  # the primary's refusal stands, the request does not fail
+    assert r.trace["status"] == "no_evidence" and not r.trace["escalated"]
+
+
+def test_llm_reranker_degrades_to_hybrid_order_on_failure(settings):
+    from langchain_core.runnables import RunnableLambda
+
+    from open_rag.retrieval.rerank import LLMReranker
+
+    def boom(_):
+        raise TimeoutError("reranker timed out")
+
+    rr = LLMReranker(settings.model_copy(update={"min_relevance": 5.0}))
+    rr.scorer = RunnableLambda(boom)
+    hits = [_hit("a"), _hit("b"), _hit("c")]
+    out = rr.rerank("q", hits, 2)
+    assert [h.chunk_id for h in out] == ["a", "b"]  # RRF order kept, the query does not fail
+    assert all(h.score >= 5.0 for h in out)  # not silently dropped by the relevance filter
