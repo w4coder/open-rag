@@ -71,7 +71,8 @@ Real quality with OpenAI models: set these in `.env`.
 RAG_LLM_PROVIDER=openai
 RAG_EMBEDDING_PROVIDER=openai
 OPENAI_API_KEY=sk-...
-RAG_RERANKER=llm          # recommended, see the benchmark below
+RAG_RERANKER=llm                      # recommended, see the benchmark below
+RAG_LLM_ESCALATION_MODEL=gpt-6-luna   # re-asks refusals to a stronger model (+4 points)
 ```
 
 Full stack (API, ingestion worker, Qdrant, Redis): `make up` (Docker required).
@@ -81,17 +82,19 @@ Full stack (API, ingestion worker, Qdrant, Redis): `make up` (Docker required).
 <!-- BENCHMARK:START -->
 Evaluated end to end on **all 1,914 text questions** of [vectara/open_ragbench](https://huggingface.co/datasets/vectara/open_ragbench): 987 arXiv papers (164k chunks), 600 of them distractors from the same fields that never contain the answer. Each answer is graded 1–5 against the dataset's reference answer by an LLM judge (`gpt-4.1-mini`); 4 or more counts as correct and a refusal counts as an error. 262 extra questions have **no answer in the index**, to measure refusals.
 
-| Configuration | Correct answers (95% CI) | Synthesis questions | Wrong answers (score ≤ 2) | Correct refusals | Latency p95 |
+| Configuration | Correct answers (95% CI) | Synthesis questions | Wrong answers (score ≤ 2) | Refusals on unanswerable | Latency p95 |
 |---|---|---|---|---|---|
 | Hybrid search (BM25 + vectors, RRF) | 86.7% (85.1–88.2) | 83.4% | 1.8% | 96.2% | 1.8 s |
-| **Hybrid + LLM reranker** | **90.2% (88.8–91.4)** | **90.0%** | 1.8% | 95.0% | 5.2 s |
+| Hybrid + LLM reranker | 90.2% (88.8–91.4) | 90.0% | 1.8% | 95.0% | 5.2 s |
+| **Hybrid + LLM reranker + refusal escalation** | **94.2% (93.1–95.2)** | **94.4%** | 2.0% | 88.5% | 5.5 s |
 
-- The LLM reranker fixes 135 questions and breaks 69 (paired McNemar test, p < 0.001); the whole gain is on synthesis questions.
+- **Refusal escalation**: when the primary model (`gpt-4o-mini`) refuses, the same prompt and context go to `gpt-6-luna`. It fixes 105 questions and breaks 29 (paired McNemar test, p < 10⁻¹⁰). Only 6.4% of queries are escalated, so median latency and cost barely move.
+- The LLM reranker fixes 135 questions and breaks 69 (p < 0.001); the gain is on synthesis questions.
+- Refusals: with escalation the system answers more of the "unanswerable" questions, but 28 of those 30 answers are fully supported by the passages it cites (another paper in the corpus covers the same subject). Answers not supported by the cited context: 0.8% of unanswerable questions.
 - The right paper is in the top 5 for 99.3% of questions and cited answers point into it 99.3% of the time.
 - Hybrid search matters at scale: dense vectors alone find the right section in the top 5 for 68.7% of questions, BM25 alone 90.5%, hybrid + reranker 92.4%.
-- Main remaining failure: over-cautious refusals when the right passage was retrieved (about 5% of questions).
 
-Generation `gpt-4o-mini`, embeddings `text-embedding-3-small`, October 2026. Questions about figures and tables are not included yet (multimodal is on the roadmap).
+Generation `gpt-4o-mini` with escalation to `gpt-6-luna`, embeddings `text-embedding-3-small`, October 2026. Questions about figures and tables are not included yet (multimodal is on the roadmap).
 <!-- BENCHMARK:END -->
 
 Reproduce it: `bash evals/run_full.sh` (needs an OpenAI key and a Qdrant server, a few dollars of API calls). See [docs/evaluation.md](docs/evaluation.md).

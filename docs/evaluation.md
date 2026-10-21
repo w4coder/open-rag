@@ -70,3 +70,19 @@ juge `gpt-4.1-mini`.
 
 Test apparié : 135 questions corrigées, 69 dégradées (McNemar, p < 0,001). Échec principal restant :
 refus excessifs alors que le bon passage était récupéré (environ 5 % des questions).
+
+### Escalade des refus (octobre 2026)
+Diagnostic : sur les refus à des questions répondables où la bonne section était transmise, la
+réponse figurait dans le contexte dans la grande majorité des cas (faiblesse de `gpt-4o-mini`).
+Avec `RAG_LLM_ESCALATION_MODEL=gpt-6-luna` (même prompt, même contexte, uniquement sur refus) :
+
+| Configuration | Réponses correctes (IC 95 %) | Refus sur questions sans réponse | Réponses non appuyées | Escaladées | Latence p95 |
+|---|---|---|---|---|---|
+| Hybride + reranker LLM | 90,2 % (88,8–91,4) | 95,0 % | – | – | 5,2 s |
+| + escalade | **94,2 % (93,1–95,2)** | 88,5 % | 0,8 % | 6,4 % | 5,5 s |
+
+Test apparié : 105 corrigées, 29 dégradées (p < 10⁻¹⁰). Le taux de refus brut baisse, mais 28 des
+30 réponses données aux questions « sans réponse » sont appuyées par les passages cités (un autre
+papier traite le sujet). Le critère du projet (refus ≥ 95 %) est conservé tel quel pour l'instant ;
+la mesure « réponses non appuyées » est ajoutée pour éclairer une éventuelle révision.
+Reproduire : `RAG_LLM_ESCALATION_MODEL=gpt-6-luna python -m evals.open_ragbench --queries 1914 --negatives 600 --holdout-papers 50 --reranker llm --reuse-retrieval full_llm`.
